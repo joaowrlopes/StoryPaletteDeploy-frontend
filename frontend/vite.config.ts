@@ -12,4 +12,8 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Força o Nitro a gerar saída compatível com Netlify (Functions)
+  nitro: {
+    preset: "netlify",
+  },
 });
