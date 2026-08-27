@@ -38,15 +38,56 @@ export const deleteBook = async (id) => {
   return response.data;
 };
 
-// Obter todos os autores
+// --- CRUD Autores ---
 export const getAllAuthors = async () => {
   const response = await api.get('/authors');
   return response.data;
 };
 
-// Obter todos os gêneros
+export const createAuthor = async (authorData) => {
+  const response = await api.post('/authors', authorData);
+  return response.data;
+};
+
+export const updateAuthor = async (id, authorData) => {
+  const response = await api.put(`/authors/${id}`, authorData);
+  return response.data;
+};
+
+export const deleteAuthor = async (id) => {
+  const response = await api.delete(`/authors/${id}`);
+  return response.data;
+};
+
+export const checkAuthor = async (name) => {
+  const response = await api.get(`/authors/check?name=${encodeURIComponent(name)}`);
+  return response.data;
+};
+
+
+// --- CRUD Gêneros ---
 export const getAllGenres = async () => {
   const response = await api.get('/genres');
+  return response.data;
+};
+
+export const createGenre = async (genreData) => {
+  const response = await api.post('/genres', genreData);
+  return response.data;
+};
+
+export const updateGenre = async (id, genreData) => {
+  const response = await api.put(`/genres/${id}`, genreData);
+  return response.data;
+};
+
+export const deleteGenre = async (id) => {
+  const response = await api.delete(`/genres/${id}`);
+  return response.data;
+};
+
+export const checkGenre = async (name) => {
+  const response = await api.get(`/genres/check?name=${encodeURIComponent(name)}`);
   return response.data;
 };
 

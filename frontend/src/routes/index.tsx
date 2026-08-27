@@ -1,6 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
-import { getAllBooks, createBook, updateBook, deleteBook } from "../services/api";
+import { 
+  getAllBooks, createBook, updateBook, deleteBook,
+  getAllAuthors, createAuthor, updateAuthor, deleteAuthor, checkAuthor,
+  getAllGenres, createGenre, updateGenre, deleteGenre, checkGenre
+} from "../services/api";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -14,18 +18,32 @@ export const Route = createFileRoute("/")({
   component: AppWrapper,
 });
 
+type Author = { _id: string; name: string };
+type Genre = { _id: string; name: string };
+
 type Book = {
   _id: string;
   title: string;
-  author: string;
-  genre: string;
+  author: Author;
+  genre: Genre[];
   publicationYear?: number;
   description?: string;
   coverUrl?: string;
+  review?: string;
+  rating?: number;
+  cryRating?: number;
 };
 
 type SortOption = "title_asc" | "title_desc" | "year_asc" | "year_desc";
 type UserRole = "admin" | "visitor" | null;
+
+const CRY_EMOJIS = {
+  1: "😐",
+  2: "🥺",
+  3: "😢",
+  4: "😭",
+  5: "🤧"
+};
 
 function AppWrapper() {
   const [loggedUser, setLoggedUser] = useState<UserRole>(null);
@@ -57,7 +75,6 @@ function LoginScreen({ onLogin }: { onLogin: (role: "admin" | "visitor") => void
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4 text-foreground relative overflow-hidden">
-      {/* Background Decorativo */}
       <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/20 blur-[120px] rounded-full pointer-events-none" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-primary/20 blur-[120px] rounded-full pointer-events-none" />
       
@@ -112,54 +129,63 @@ function LoginScreen({ onLogin }: { onLogin: (role: "admin" | "visitor") => void
 
 function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogout: () => void }) {
   const [books, setBooks] = useState<Book[]>([]);
+  const [authors, setAuthors] = useState<Author[]>([]);
+  const [genres, setGenres] = useState<Genre[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Filtros
   const [query, setQuery] = useState("");
-  const [genre, setGenre] = useState("Todos");
+  const [filterGenre, setFilterGenre] = useState("Todos");
   const [sort, setSort] = useState<SortOption>("title_asc");
 
-  // Estado do Modal
+  // Estados dos Modais
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  // Para diferenciar entre adicionar e editar
+  // Modais de Autor/Gênero
+  const [agModal, setAgModal] = useState<{ type: 'author'|'genre'|null, id: string|null, name: string }>({ type: null, id: null, name: "" });
+  
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     title: "",
     author: "",
-    genre: "",
+    genre: [] as string[],
     publicationYear: "",
     description: "",
-    coverUrl: ""
+    coverUrl: "",
+    review: "",
+    rating: 0,
+    cryRating: 0
   });
 
   const isAdmin = userRole === "admin";
 
+  const fetchData = async () => {
+    try {
+      const [booksData, authorsData, genresData] = await Promise.all([
+        getAllBooks(),
+        getAllAuthors(),
+        getAllGenres()
+      ]);
+      setBooks(booksData);
+      setAuthors(authorsData);
+      setGenres(genresData);
+    } catch (error) {
+      console.error("Erro ao buscar dados da API:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchBooks = async () => {
-      try {
-        const data = await getAllBooks();
-        setBooks(data);
-      } catch (error) {
-        console.error("Erro ao buscar livros da API:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchBooks();
+    fetchData();
   }, []);
-
-  const genres = useMemo(() => {
-    return ["Todos", ...Array.from(new Set(books.map((b) => b.genre)))];
-  }, [books]);
 
   const filtered = useMemo(() => {
     const q = query.toLowerCase().trim();
     return books.filter((b) => {
-      const matchesQ = !q || b.title.toLowerCase().includes(q) || b.author.toLowerCase().includes(q);
-      const matchesG = genre === "Todos" || b.genre === genre;
+      const matchesQ = !q || b.title.toLowerCase().includes(q) || (b.author?.name || '').toLowerCase().includes(q);
+      const matchesG = filterGenre === "Todos" || b.genre.some(g => g.name === filterGenre);
       return matchesQ && matchesG;
     }).sort((a, b) => {
       if (sort === "title_asc") return a.title.localeCompare(b.title);
@@ -173,11 +199,11 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
       
       return 0;
     });
-  }, [books, query, genre, sort]);
+  }, [books, query, filterGenre, sort]);
 
   const openAddModal = () => {
     setEditingId(null);
-    setFormData({ title: "", author: "", genre: "", publicationYear: "", description: "", coverUrl: "" });
+    setFormData({ title: "", author: "", genre: [], publicationYear: "", description: "", coverUrl: "", review: "", rating: 0, cryRating: 0 });
     setIsModalOpen(true);
   };
 
@@ -185,17 +211,25 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
     setEditingId(book._id);
     setFormData({
       title: book.title,
-      author: book.author,
-      genre: book.genre,
+      author: book.author?._id || "",
+      genre: book.genre?.map(g => g._id) || [],
       publicationYear: book.publicationYear ? String(book.publicationYear) : "",
       description: book.description || "",
-      coverUrl: book.coverUrl || ""
+      coverUrl: book.coverUrl || "",
+      review: book.review || "",
+      rating: book.rating || 0,
+      cryRating: book.cryRating || 0
     });
     setIsModalOpen(true);
   };
 
   const handleSaveBook = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!formData.author || formData.genre.length === 0) {
+      alert("Por favor, selecione um autor e pelo menos um gênero.");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const bookPayload = {
@@ -204,13 +238,12 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
       };
       
       if (editingId) {
-        const updatedBook = await updateBook(editingId, bookPayload);
-        setBooks((prev) => prev.map(b => b._id === editingId ? updatedBook : b));
+        await updateBook(editingId, bookPayload);
       } else {
-        const createdBook = await createBook(bookPayload);
-        setBooks((prev) => [createdBook, ...prev]);
+        await createBook(bookPayload);
       }
       
+      await fetchData(); // Recarrega para pegar os dados populados
       setIsModalOpen(false);
     } catch (error) {
       console.error("Erro ao salvar livro:", error);
@@ -222,10 +255,7 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
 
   const handleDeleteBook = async () => {
     if (!editingId) return;
-    
-    if (!window.confirm("Tem certeza que deseja excluir este livro?")) {
-      return;
-    }
+    if (!window.confirm("Tem certeza que deseja excluir este livro?")) return;
     
     setIsSubmitting(true);
     try {
@@ -234,10 +264,74 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
       setIsModalOpen(false);
     } catch (error) {
       console.error("Erro ao excluir livro:", error);
-      alert("Houve um erro ao tentar excluir o livro.");
+      alert("Houve um erro ao excluir o livro.");
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  // --- Funções de Autor / Gênero ---
+  const handleSaveAg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const { type, id, name } = agModal;
+    if (!name.trim()) return;
+
+    try {
+      const checkFn = type === 'author' ? checkAuthor : checkGenre;
+      const checkRes = await checkFn(name);
+      
+      if (checkRes.exists && checkRes[type]._id !== id) {
+        alert(`${type === 'author' ? 'Autor' : 'Gênero'} já existe no banco!`);
+        return;
+      }
+
+      if (id) {
+        // Edit
+        if (type === 'author') await updateAuthor(id, { name });
+        else await updateGenre(id, { name });
+      } else {
+        // Create
+        if (type === 'author') {
+           const res = await createAuthor({ name });
+           setFormData(prev => ({...prev, author: res._id}));
+        } else {
+           const res = await createGenre({ name });
+           setFormData(prev => ({...prev, genre: [...prev.genre, res._id]}));
+        }
+      }
+      
+      await fetchData();
+      setAgModal({ type: null, id: null, name: "" });
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao salvar.");
+    }
+  };
+
+  const handleDeleteAg = async () => {
+    const { type, id } = agModal;
+    if (!id) return;
+    if (!window.confirm("Tem certeza? Isso pode causar problemas se houver livros vinculados.")) return;
+    
+    try {
+      if (type === 'author') await deleteAuthor(id);
+      else await deleteGenre(id);
+      
+      await fetchData();
+      setAgModal({ type: null, id: null, name: "" });
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao excluir.");
+    }
+  };
+
+  const renderStars = (rating: number) => {
+    if (!rating) return null;
+    return (
+      <span className="text-yellow-500 text-lg">
+        {"★".repeat(rating)}{"☆".repeat(5 - rating)}
+      </span>
+    );
   };
 
   return (
@@ -264,7 +358,6 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
             className="self-start md:self-auto flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-destructive transition-colors px-3 py-2 rounded-md hover:bg-destructive/10"
           >
             Sair
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
           </button>
         </div>
       </header>
@@ -279,12 +372,13 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
             className="w-full rounded-md border border-input bg-card px-4 py-2.5 text-sm text-card-foreground outline-none transition focus:border-ring focus:ring-2 focus:ring-ring/30"
           />
           <select
-            value={genre}
-            onChange={(e) => setGenre(e.target.value)}
+            value={filterGenre}
+            onChange={(e) => setFilterGenre(e.target.value)}
             className="rounded-md border border-input bg-card px-3 py-2.5 text-sm text-card-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
           >
+            <option value="Todos">Todos os Gêneros</option>
             {genres.map((g) => (
-              <option key={g} value={g}>{g}</option>
+              <option key={g._id} value={g.name}>{g.name}</option>
             ))}
           </select>
           <select
@@ -326,7 +420,6 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
                   <button 
                     onClick={() => openEditModal(book)}
                     className="absolute top-4 right-4 z-10 bg-background/90 backdrop-blur-md border border-border px-3 py-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-300 hover:bg-primary hover:text-primary-foreground hover:border-primary text-xs font-semibold shadow-sm transform translate-y-2 group-hover:translate-y-0"
-                    title="Editar Livro"
                   >
                     Editar
                   </button>
@@ -347,92 +440,149 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
                   )}
                 </div>
 
-                <div className="flex items-center justify-between mt-2">
-                  <span className="rounded-md bg-primary/10 text-primary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest font-bold">
-                    {book.genre}
-                  </span>
+                <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1">
+                    {book.genre?.map(g => (
+                       <span key={g._id} className="rounded-md bg-primary/10 text-primary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest font-bold">
+                         {g.name}
+                       </span>
+                    ))}
+                  </div>
                   <span className="font-mono text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">{book.publicationYear || "N/A"}</span>
                 </div>
 
                 <h2 className="mt-4 font-serif text-xl font-bold leading-tight group-hover:text-primary transition-colors">
                   {book.title}
                 </h2>
-                <p className="text-sm text-muted-foreground mt-1 font-medium">por {book.author}</p>
+                <p className="text-sm text-muted-foreground mt-1 font-medium">por {book.author?.name || 'Desconhecido'}</p>
+
+                {(book.rating || book.cryRating) && (
+                  <div className="flex items-center gap-3 mt-2">
+                    {renderStars(book.rating || 0)}
+                    {book.cryRating ? <span className="text-lg" title="Nível de Choro">{CRY_EMOJIS[book.cryRating as keyof typeof CRY_EMOJIS]}</span> : null}
+                  </div>
+                )}
 
                 <p className="mt-4 line-clamp-3 text-sm text-foreground/70 leading-relaxed">{book.description}</p>
               </article>
             ))}
           </section>
         )}
-
-        {!loading && filtered.length === 0 && (
-          <div className="mt-10 rounded-2xl border-2 border-dashed border-border bg-card p-16 text-center shadow-sm">
-            <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
-              <span className="text-2xl opacity-50">🔍</span>
-            </div>
-            <p className="font-serif text-xl font-medium">Nenhum livro encontrado.</p>
-            <p className="mt-2 text-sm text-muted-foreground max-w-sm mx-auto">Não conseguimos localizar nenhum livro com os filtros atuais. Tente buscar por outros termos.</p>
-          </div>
-        )}
       </main>
 
-      {/* Modal de Adicionar/Editar Livro - Apenas para Admin */}
+      {/* Modal de Livro */}
       {isModalOpen && isAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
-          <div className="bg-card w-full max-w-md rounded-2xl shadow-2xl border border-border p-8 relative max-h-[90vh] overflow-y-auto">
-            <button 
-              onClick={() => setIsModalOpen(false)}
-              className="absolute top-6 right-6 text-muted-foreground hover:text-foreground bg-muted hover:bg-accent rounded-full p-2 transition-colors"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-            </button>
+          <div className="bg-card w-full max-w-lg rounded-2xl shadow-2xl border border-border p-8 relative max-h-[90vh] overflow-y-auto">
+            <button onClick={() => setIsModalOpen(false)} className="absolute top-6 right-6 text-muted-foreground hover:text-foreground bg-muted hover:bg-accent rounded-full p-2">✕</button>
             <h2 className="text-3xl font-serif font-bold mb-6">{editingId ? "Editar Livro" : "Novo Livro"}</h2>
+            
             <form onSubmit={handleSaveBook} className="flex flex-col gap-5">
               <div>
-                <label className="text-sm font-semibold mb-1.5 block text-foreground/80">Título *</label>
-                <input required type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full rounded-lg border border-input px-4 py-2.5 text-sm bg-background transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" />
-              </div>
-              <div className="grid grid-cols-2 gap-5">
-                <div>
-                  <label className="text-sm font-semibold mb-1.5 block text-foreground/80">Autor *</label>
-                  <input required type="text" value={formData.author} onChange={e => setFormData({...formData, author: e.target.value})} className="w-full rounded-lg border border-input px-4 py-2.5 text-sm bg-background transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" />
-                </div>
-                <div>
-                  <label className="text-sm font-semibold mb-1.5 block text-foreground/80">Gênero *</label>
-                  <input required type="text" value={formData.genre} onChange={e => setFormData({...formData, genre: e.target.value})} className="w-full rounded-lg border border-input px-4 py-2.5 text-sm bg-background transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-5">
-                <div>
-                  <label className="text-sm font-semibold mb-1.5 block text-foreground/80">Ano</label>
-                  <input type="number" value={formData.publicationYear} onChange={e => setFormData({...formData, publicationYear: e.target.value})} className="w-full rounded-lg border border-input px-4 py-2.5 text-sm bg-background transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" />
-                </div>
-                <div>
-                  <label className="text-sm font-semibold mb-1.5 block text-foreground/80">URL da Capa</label>
-                  <input type="url" placeholder="https://..." value={formData.coverUrl} onChange={e => setFormData({...formData, coverUrl: e.target.value})} className="w-full rounded-lg border border-input px-4 py-2.5 text-sm bg-background transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" />
-                </div>
-              </div>
-              <div>
-                <label className="text-sm font-semibold mb-1.5 block text-foreground/80">Descrição</label>
-                <textarea rows={3} value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full rounded-lg border border-input px-4 py-2.5 text-sm bg-background transition-colors focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none resize-none" />
+                <label className="text-sm font-semibold mb-1.5 block">Título *</label>
+                <input required type="text" value={formData.title} onChange={e => setFormData({...formData, title: e.target.value})} className="w-full rounded-lg border px-4 py-2.5 text-sm" />
               </div>
               
-              <div className={`mt-4 flex ${editingId ? 'justify-between gap-4' : 'justify-end'}`}>
+              <div className="grid grid-cols-2 gap-5">
+                <div>
+                  <label className="text-sm font-semibold mb-1.5 block">Autor *</label>
+                  <div className="flex gap-2">
+                    <select required value={formData.author} onChange={e => setFormData({...formData, author: e.target.value})} className="w-full rounded-lg border px-3 py-2.5 text-sm">
+                      <option value="">Selecione...</option>
+                      {authors.map(a => <option key={a._id} value={a._id}>{a.name}</option>)}
+                    </select>
+                    <button type="button" onClick={() => setAgModal({ type: 'author', id: null, name: '' })} className="bg-accent px-2 rounded-md text-xs font-bold">+ NOVO</button>
+                    {formData.author && (
+                      <button type="button" onClick={() => {
+                        const a = authors.find(x => x._id === formData.author);
+                        if(a) setAgModal({ type: 'author', id: a._id, name: a.name });
+                      }} className="bg-accent px-2 rounded-md text-xs">✎</button>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-sm font-semibold mb-1.5 block">Gêneros *</label>
+                  <div className="flex gap-2">
+                    <select required multiple value={formData.genre} onChange={e => {
+                      const options = Array.from(e.target.selectedOptions, option => option.value);
+                      setFormData({...formData, genre: options});
+                    }} className="w-full rounded-lg border px-3 py-2.5 text-sm h-11">
+                      {genres.map(g => <option key={g._id} value={g._id}>{g.name}</option>)}
+                    </select>
+                    <button type="button" onClick={() => setAgModal({ type: 'genre', id: null, name: '' })} className="bg-accent px-2 rounded-md text-xs font-bold h-11">+ NOVO</button>
+                    {formData.genre.length === 1 && (
+                      <button type="button" onClick={() => {
+                        const gId = formData.genre[0];
+                        const g = genres.find(x => x._id === gId);
+                        if(g) setAgModal({ type: 'genre', id: g._id, name: g.name });
+                      }} className="bg-accent px-2 rounded-md text-xs h-11">✎</button>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">Segure CTRL/CMD para múltipla seleção</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-5">
+                <div>
+                  <label className="text-sm font-semibold mb-1.5 block">Ano</label>
+                  <input type="number" value={formData.publicationYear} onChange={e => setFormData({...formData, publicationYear: e.target.value})} className="w-full rounded-lg border px-4 py-2.5 text-sm" />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold mb-1.5 block">URL da Capa</label>
+                  <input type="url" placeholder="https://..." value={formData.coverUrl} onChange={e => setFormData({...formData, coverUrl: e.target.value})} className="w-full rounded-lg border px-4 py-2.5 text-sm" />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold mb-1.5 block">Sinopse</label>
+                <textarea rows={2} value={formData.description} onChange={e => setFormData({...formData, description: e.target.value})} className="w-full rounded-lg border px-4 py-2.5 text-sm resize-none" />
+              </div>
+
+              <div>
+                <label className="text-sm font-semibold mb-1.5 block text-primary">Resenha</label>
+                <textarea rows={3} value={formData.review} onChange={e => setFormData({...formData, review: e.target.value})} className="w-full rounded-lg border border-primary/50 px-4 py-2.5 text-sm resize-none" placeholder="Escreva sua resenha sobre o livro..." />
+              </div>
+
+              <div className="grid grid-cols-2 gap-5 bg-muted/50 p-4 rounded-xl border border-border">
+                <div>
+                  <label className="text-sm font-semibold mb-2 block text-center">Avaliação (Estrelas)</label>
+                  <div className="flex justify-center gap-2">
+                    {[1,2,3,4,5].map(star => (
+                      <button 
+                        key={star} 
+                        type="button" 
+                        onClick={() => setFormData({...formData, rating: star === formData.rating ? 0 : star})}
+                        className={`text-2xl transition-all ${star <= formData.rating ? 'text-yellow-500 scale-110' : 'text-gray-300 hover:text-yellow-300'}`}
+                      >
+                        ★
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm font-semibold mb-2 block text-center">Nível de Choro</label>
+                  <div className="flex justify-center gap-2">
+                    {[1,2,3,4,5].map(lvl => (
+                      <button 
+                        key={lvl} 
+                        type="button" 
+                        onClick={() => setFormData({...formData, cryRating: lvl === formData.cryRating ? 0 : lvl})}
+                        className={`text-2xl transition-all ${lvl === formData.cryRating ? 'scale-125 opacity-100' : 'opacity-50 hover:opacity-100'}`}
+                        title={CRY_EMOJIS[lvl as keyof typeof CRY_EMOJIS]}
+                      >
+                        {CRY_EMOJIS[lvl as keyof typeof CRY_EMOJIS]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              
+              <div className={`mt-2 flex ${editingId ? 'justify-between gap-4' : 'justify-end'}`}>
                 {editingId && (
-                  <button 
-                    type="button" 
-                    onClick={handleDeleteBook}
-                    disabled={isSubmitting}
-                    className="bg-destructive/10 text-destructive hover:bg-destructive hover:text-destructive-foreground px-5 py-2.5 rounded-lg font-semibold transition-colors disabled:opacity-50"
-                  >
-                    Excluir Livro
-                  </button>
+                  <button type="button" onClick={handleDeleteBook} disabled={isSubmitting} className="text-destructive font-semibold">Excluir Livro</button>
                 )}
-                <button 
-                  type="submit" 
-                  disabled={isSubmitting}
-                  className={`bg-primary text-primary-foreground hover:bg-primary/90 px-5 py-2.5 rounded-lg font-semibold transition-all hover:shadow-md hover:-translate-y-0.5 disabled:opacity-50 disabled:transform-none ${!editingId ? 'w-full' : 'flex-1'}`}
-                >
+                <button type="submit" disabled={isSubmitting} className={`bg-primary text-primary-foreground hover:bg-primary/90 px-5 py-2.5 rounded-lg font-semibold ${!editingId ? 'w-full' : 'w-2/3'}`}>
                   {isSubmitting ? "Salvando..." : "Salvar Alterações"}
                 </button>
               </div>
@@ -441,6 +591,39 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
         </div>
       )}
 
+      {/* Sub Modal - Autor/Gênero */}
+      {agModal.type && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-card w-full max-w-sm rounded-xl shadow-2xl p-6">
+            <h3 className="text-xl font-bold mb-4">
+              {agModal.id ? "Editar " : "Novo "}
+              {agModal.type === 'author' ? 'Autor' : 'Gênero'}
+            </h3>
+            <form onSubmit={handleSaveAg}>
+              <input 
+                autoFocus
+                required 
+                type="text" 
+                value={agModal.name} 
+                onChange={e => setAgModal({...agModal, name: e.target.value})} 
+                className="w-full rounded-md border px-3 py-2 mb-4" 
+                placeholder="Nome..."
+              />
+              <div className="flex justify-between">
+                <div>
+                  {agModal.id && (
+                     <button type="button" onClick={handleDeleteAg} className="text-destructive text-sm font-semibold py-2">Excluir</button>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <button type="button" onClick={() => setAgModal({ type: null, id: null, name: "" })} className="px-4 py-2 text-sm bg-muted rounded-md">Cancelar</button>
+                  <button type="submit" className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md font-semibold">Salvar</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
