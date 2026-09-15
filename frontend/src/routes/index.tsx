@@ -145,6 +145,9 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
   // Modais de Autor/Gênero
   const [agModal, setAgModal] = useState<{ type: 'author' | 'genre' | null, id: string | null, name: string }>({ type: null, id: null, name: "" });
 
+  // Modal de Visualização
+  const [viewingBook, setViewingBook] = useState<Book | null>(null);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     title: "",
@@ -418,15 +421,6 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
                 key={book._id}
                 className="group flex flex-col rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:border-primary/50 relative overflow-hidden"
               >
-                {isAdmin && (
-                  <button
-                    onClick={() => openEditModal(book)}
-                    className="absolute top-4 right-4 z-10 bg-background/90 backdrop-blur-md border border-border px-3 py-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-all duration-300 hover:bg-primary hover:text-primary-foreground hover:border-primary text-xs font-semibold shadow-sm transform translate-y-2 group-hover:translate-y-0"
-                  >
-                    Editar
-                  </button>
-                )}
-
                 <div className="mb-4 flex h-48 items-center justify-center rounded-lg bg-muted overflow-hidden relative shadow-inner">
                   {book.coverUrl ? (
                     <img src={book.coverUrl} alt={`Capa do livro ${book.title}`} className="h-full w-full object-cover opacity-90 transition-transform duration-500 group-hover:scale-105" />
@@ -465,7 +459,25 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
                   </div>
                 )}
 
-                <p className="mt-4 line-clamp-3 text-sm text-foreground/70 leading-relaxed">{book.description}</p>
+                <p className="mt-3 line-clamp-3 text-sm text-foreground/70 leading-relaxed flex-1">{book.description}</p>
+
+                {/* Botões fixos no rodapé do card */}
+                <div className={`mt-4 pt-3 border-t border-border grid gap-2 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                  {isAdmin && (
+                    <button
+                      onClick={() => openEditModal(book)}
+                      className="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-background py-2 text-sm font-semibold text-foreground hover:bg-primary hover:text-primary-foreground hover:border-primary transition-colors"
+                    >
+                      ✏️ Editar
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setViewingBook(book)}
+                    className="flex items-center justify-center gap-1.5 rounded-lg border border-primary/40 bg-primary/5 py-2 text-sm font-semibold text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                  >
+                    👁️ Visualizar
+                  </button>
+                </div>
               </article>
             ))}
           </section>
@@ -754,6 +766,95 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
                 </div>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Visualização */}
+      {viewingBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4" onClick={() => setViewingBook(null)}>
+          <div className="bg-card w-full max-w-lg rounded-2xl shadow-2xl border border-border relative max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            {/* Capa */}
+            <div className="relative h-56 w-full overflow-hidden rounded-t-2xl bg-muted">
+              {viewingBook.coverUrl ? (
+                <img src={viewingBook.coverUrl} alt={`Capa de ${viewingBook.title}`} className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center font-serif text-6xl font-bold text-primary-foreground"
+                  style={{ background: `linear-gradient(135deg, var(--chart-1), var(--primary))` }}>
+                  {viewingBook.title.charAt(0)}
+                </div>
+              )}
+              <button
+                onClick={() => setViewingBook(null)}
+                className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors"
+              >✕</button>
+              {isAdmin && (
+                <button
+                  onClick={() => { setViewingBook(null); openEditModal(viewingBook); }}
+                  className="absolute bottom-4 right-4 bg-primary text-primary-foreground rounded-lg px-4 py-2 text-sm font-semibold shadow-lg hover:bg-primary/90 transition-colors"
+                >
+                  ✏️ Editar
+                </button>
+              )}
+            </div>
+
+            <div className="p-6">
+              {/* Gêneros e Ano */}
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {viewingBook.genre?.map(g => (
+                    <span key={g._id} className="rounded-md bg-primary/10 text-primary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest font-bold">
+                      {g.name}
+                    </span>
+                  ))}
+                </div>
+                {viewingBook.publicationYear && (
+                  <span className="font-mono text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">
+                    {viewingBook.publicationYear}
+                  </span>
+                )}
+              </div>
+
+              {/* Título e Autor */}
+              <h2 className="font-serif text-2xl font-bold leading-tight">{viewingBook.title}</h2>
+              <p className="text-sm text-muted-foreground mt-1 font-medium mb-3">por {viewingBook.author?.name || 'Desconhecido'}</p>
+
+              {/* Avaliações */}
+              {(viewingBook.rating || viewingBook.cryRating) && (
+                <div className="flex items-center gap-4 bg-muted/50 rounded-xl p-3 mb-4">
+                  {viewingBook.rating ? (
+                    <div className="text-center">
+                      <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Avaliação</p>
+                      <span className="text-xl text-yellow-500">
+                        {"★".repeat(viewingBook.rating)}{"☆".repeat(5 - viewingBook.rating)}
+                      </span>
+                    </div>
+                  ) : null}
+                  {viewingBook.cryRating ? (
+                    <div className="text-center">
+                      <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Chorômetro</p>
+                      <span className="text-2xl">{CRY_EMOJIS[viewingBook.cryRating as keyof typeof CRY_EMOJIS]}</span>
+                    </div>
+                  ) : null}
+                </div>
+              )}
+
+              {/* Sinopse */}
+              {viewingBook.description && (
+                <div className="mb-4">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Sinopse</h3>
+                  <p className="text-sm text-foreground/80 leading-relaxed">{viewingBook.description}</p>
+                </div>
+              )}
+
+              {/* Resenha */}
+              {viewingBook.review && (
+                <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-primary mb-2">✍️ Resenha</h3>
+                  <p className="text-sm text-foreground/80 leading-relaxed">{viewingBook.review}</p>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
