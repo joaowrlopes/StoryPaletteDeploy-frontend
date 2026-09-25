@@ -194,18 +194,23 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
 
   const fetchData = async () => {
     try {
-      const [booksData, authorsData, genresData, wishlistData] = await Promise.all([
+      // Fazemos as requisições separadas ou tratamos individualmente
+      // para evitar que uma rota não pronta (404) quebre tudo
+      const [booksRes, authorsRes, genresRes, wishlistRes] = await Promise.allSettled([
         getAllBooks(),
         getAllAuthors(),
         getAllGenres(),
         getWishlist()
       ]);
-      setBooks(booksData);
-      setAuthors(authorsData);
-      setGenres(genresData);
-      setWishlist(wishlistData);
+
+      if (booksRes.status === "fulfilled") setBooks(booksRes.value);
+      if (authorsRes.status === "fulfilled") setAuthors(authorsRes.value);
+      if (genresRes.status === "fulfilled") setGenres(genresRes.value);
+      if (wishlistRes.status === "fulfilled") setWishlist(wishlistRes.value);
+      else console.warn("Wishlist endpoint falhou, possivelmente deploy do backend ainda não terminou.");
+
     } catch (error) {
-      console.error("Erro ao buscar dados da API:", error);
+      console.error("Erro inesperado ao buscar dados da API:", error);
     } finally {
       setLoading(false);
     }
