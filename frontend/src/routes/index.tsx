@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   getAllBooks, createBook, updateBook, deleteBook,
   getAllAuthors, createAuthor, updateAuthor, deleteAuthor, checkAuthor,
-  getAllGenres, createGenre, updateGenre, deleteGenre, checkGenre
+  getAllGenres, createGenre, updateGenre, deleteGenre, checkGenre,
+  getWishlist, createWishlistBook, updateWishlistBook, deleteWishlistBook, moveWishlistToCatalog
 } from "../services/api";
 
 export const Route = createFileRoute("/")({
@@ -34,8 +35,19 @@ type Book = {
   cryRating?: number;
 };
 
+type WishlistBook = {
+  _id: string;
+  title: string;
+  author: Author;
+  genre: Genre[];
+  publicationYear?: number;
+  coverUrl?: string;
+  purchaseLink?: string;
+};
+
 type SortOption = "title_asc" | "title_desc" | "year_asc" | "year_desc";
 type UserRole = "admin" | "visitor" | null;
+type ActiveTab = "catalog" | "wishlist";
 
 const CRY_EMOJIS = {
   1: "😐",
@@ -129,24 +141,41 @@ function LoginScreen({ onLogin }: { onLogin: (role: "admin" | "visitor") => void
 
 function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogout: () => void }) {
   const [books, setBooks] = useState<Book[]>([]);
+  const [wishlist, setWishlist] = useState<WishlistBook[]>([]);
   const [authors, setAuthors] = useState<Author[]>([]);
   const [genres, setGenres] = useState<Genre[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Aba ativa
+  const [activeTab, setActiveTab] = useState<ActiveTab>("catalog");
 
   // Filtros
   const [query, setQuery] = useState("");
   const [filterGenre, setFilterGenre] = useState("Todos");
   const [sort, setSort] = useState<SortOption>("title_asc");
 
-  // Estados dos Modais
+  // Estados dos Modais (catálogo)
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Modal de Wishlist
+  const [isWishlistModalOpen, setIsWishlistModalOpen] = useState(false);
+  const [editingWishlistId, setEditingWishlistId] = useState<string | null>(null);
+  const [wishlistFormData, setWishlistFormData] = useState({
+    title: "",
+    author: "",
+    genre: [] as string[],
+    publicationYear: "",
+    coverUrl: "",
+    purchaseLink: ""
+  });
 
   // Modais de Autor/Gênero
   const [agModal, setAgModal] = useState<{ type: 'author' | 'genre' | null, id: string | null, name: string }>({ type: null, id: null, name: "" });
 
   // Modal de Visualização
   const [viewingBook, setViewingBook] = useState<Book | null>(null);
+  const [viewingWishlistBook, setViewingWishlistBook] = useState<WishlistBook | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
@@ -165,14 +194,16 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
 
   const fetchData = async () => {
     try {
-      const [booksData, authorsData, genresData] = await Promise.all([
+      const [booksData, authorsData, genresData, wishlistData] = await Promise.all([
         getAllBooks(),
         getAllAuthors(),
-        getAllGenres()
+        getAllGenres(),
+        getWishlist()
       ]);
       setBooks(booksData);
       setAuthors(authorsData);
       setGenres(genresData);
+      setWishlist(wishlistData);
     } catch (error) {
       console.error("Erro ao buscar dados da API:", error);
     } finally {
@@ -339,10 +370,87 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
     );
   };
 
+  // --- Handlers Wishlist ---
+  const openAddWishlistModal = () => {
+    setEditingWishlistId(null);
+    setWishlistFormData({ title: "", author: "", genre: [], publicationYear: "", coverUrl: "", purchaseLink: "" });
+    setIsWishlistModalOpen(true);
+  };
+
+  const openEditWishlistModal = (item: WishlistBook) => {
+    setEditingWishlistId(item._id);
+    setWishlistFormData({
+      title: item.title,
+      author: item.author?._id || "",
+      genre: item.genre?.map(g => g._id) || [],
+      publicationYear: item.publicationYear ? String(item.publicationYear) : "",
+      coverUrl: item.coverUrl || "",
+      purchaseLink: item.purchaseLink || ""
+    });
+    setIsWishlistModalOpen(true);
+  };
+
+  const handleSaveWishlistBook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!wishlistFormData.author || wishlistFormData.genre.length === 0) {
+      alert("Por favor, selecione um autor e pelo menos um gênero.");
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        ...wishlistFormData,
+        publicationYear: wishlistFormData.publicationYear ? parseInt(wishlistFormData.publicationYear) : undefined
+      };
+      if (editingWishlistId) {
+        await updateWishlistBook(editingWishlistId, payload);
+      } else {
+        await createWishlistBook(payload);
+      }
+      await fetchData();
+      setIsWishlistModalOpen(false);
+    } catch (error) {
+      console.error("Erro ao salvar item da wishlist:", error);
+      alert("Houve um erro ao salvar. Verifique o console.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteWishlistBook = async () => {
+    if (!editingWishlistId) return;
+    if (!window.confirm("Tem certeza que deseja remover este livro da lista de desejos?")) return;
+    setIsSubmitting(true);
+    try {
+      await deleteWishlistBook(editingWishlistId);
+      setIsWishlistModalOpen(false);
+      await fetchData();
+    } catch (error) {
+      console.error("Erro ao excluir da wishlist:", error);
+      alert("Houve um erro ao excluir.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleMoveToCatalog = async (item: WishlistBook) => {
+    if (!window.confirm(`Mover "${item.title}" para o catálogo? O livro será removido da lista de desejos.`)) return;
+    try {
+      const newBook = await moveWishlistToCatalog(item._id);
+      await fetchData();
+      // Abre modal de edição do catálogo com os dados pré-preenchidos
+      setActiveTab("catalog");
+      openEditModal(newBook);
+    } catch (error) {
+      console.error("Erro ao mover para o catálogo:", error);
+      alert("Houve um erro ao mover o livro.");
+    }
+  };
+
   return (
     <div className="min-h-screen bg-background text-foreground relative">
       <header className="border-b border-border bg-sidebar">
-        <div className="mx-auto max-w-6xl px-6 py-6 md:py-10 flex flex-col md:flex-row justify-between md:items-end gap-4">
+        <div className="mx-auto max-w-6xl px-6 pt-6 md:pt-10 pb-0 flex flex-col md:flex-row justify-between md:items-end gap-4">
           <div>
             <div className="flex items-center gap-3 mb-2">
               <span className="font-mono text-xs uppercase tracking-[0.2em] text-primary">Sua Coleção</span>
@@ -351,11 +459,12 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
               </span>
             </div>
             <h1 className="font-serif text-4xl font-bold tracking-tight md:text-5xl">
-              Catálogo de Livros
+              {activeTab === "catalog" ? "Catálogo de Livros" : "Lista de Desejos"}
             </h1>
             <p className="mt-3 max-w-2xl text-muted-foreground">
-              Explore nossa coleção de livros armazenada no MongoDB. Filtre por gênero, busque por título
-              ou autor.
+              {activeTab === "catalog"
+                ? "Explore nossa coleção de livros armazenada no MongoDB. Filtre por gênero, busque por título ou autor."
+                : "Livros que você deseja adquirir. Clique em \"Mover para o Catálogo\" quando adquirir um livro."}
             </p>
           </div>
           <button
@@ -365,9 +474,35 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
             Sair
           </button>
         </div>
+        {/* Abas de navegação */}
+        <div className="mx-auto max-w-6xl px-6 flex gap-0 mt-4">
+          <button
+            onClick={() => setActiveTab("catalog")}
+            className={`px-6 py-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${
+              activeTab === "catalog"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            📚 Meu Catálogo
+            <span className="ml-2 text-[10px] bg-muted rounded-full px-2 py-0.5">{books.length}</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("wishlist")}
+            className={`px-6 py-3 text-sm font-bold uppercase tracking-wider border-b-2 transition-colors ${
+              activeTab === "wishlist"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            🎁 Lista de Desejos
+            <span className="ml-2 text-[10px] bg-muted rounded-full px-2 py-0.5">{wishlist.length}</span>
+          </button>
+        </div>
       </header>
 
       <main className="mx-auto max-w-6xl px-6 py-10">
+        {/* Barra de filtros */}
         <section className={`mb-8 grid gap-4 ${isAdmin ? 'md:grid-cols-[1fr_auto_auto_auto]' : 'md:grid-cols-[1fr_auto_auto]'}`}>
           <input
             type="search"
@@ -396,7 +531,7 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
             <option value="year_asc">Ano (Crescente)</option>
             <option value="year_desc">Ano (Decrescente)</option>
           </select>
-          {isAdmin && (
+          {isAdmin && activeTab === "catalog" && (
             <button
               onClick={openAddModal}
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2.5 rounded-md text-sm font-medium transition-colors shadow-sm whitespace-nowrap"
@@ -404,85 +539,165 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
               + Adicionar Livro
             </button>
           )}
+          {isAdmin && activeTab === "wishlist" && (
+            <button
+              onClick={openAddWishlistModal}
+              className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2.5 rounded-md text-sm font-medium transition-colors shadow-sm whitespace-nowrap"
+            >
+              + Adicionar à Wishlist
+            </button>
+          )}
         </section>
-
-        <p className="mb-6 font-mono text-xs text-muted-foreground">
-          {loading ? "Carregando..." : `${filtered.length} ${filtered.length === 1 ? "livro encontrado" : "livros encontrados"}`}
-        </p>
 
         {loading ? (
           <div className="mt-10 flex justify-center p-12">
             <p className="font-serif text-lg text-muted-foreground">Conectando ao MongoDB...</p>
           </div>
-        ) : (
-          <section className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {filtered.map((book, index) => (
-              <article
-                key={book._id}
-                className="group flex flex-col rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:border-primary/50 relative overflow-hidden"
-              >
-                <div className="mb-4 flex h-48 items-center justify-center rounded-lg bg-muted overflow-hidden relative shadow-inner">
-                  {book.coverUrl ? (
-                    <img src={book.coverUrl} alt={`Capa do livro ${book.title}`} className="h-full w-full object-cover opacity-90 transition-transform duration-500 group-hover:scale-105" />
-                  ) : (
-                    <div
-                      className="flex h-36 w-28 items-center justify-center rounded-md font-serif text-3xl font-bold text-primary-foreground shadow-md transition-transform duration-500 group-hover:scale-105"
-                      style={{
-                        background: `linear-gradient(135deg, var(--chart-${(index % 5) + 1}), var(--primary))`,
-                      }}
-                    >
-                      {book.title.charAt(0)}
+        ) : activeTab === "catalog" ? (
+          <>
+            <p className="mb-6 font-mono text-xs text-muted-foreground">
+              {`${filtered.length} ${filtered.length === 1 ? "livro encontrado" : "livros encontrados"}`}
+            </p>
+            <section className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {filtered.map((book, index) => (
+                <article
+                  key={book._id}
+                  className="group flex flex-col rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:border-primary/50 relative overflow-hidden"
+                >
+                  <div className="mb-4 flex h-48 items-center justify-center rounded-lg bg-muted overflow-hidden relative shadow-inner">
+                    {book.coverUrl ? (
+                      <img src={book.coverUrl} alt={`Capa do livro ${book.title}`} className="h-full w-full object-cover opacity-90 transition-transform duration-500 group-hover:scale-105" />
+                    ) : (
+                      <div
+                        className="flex h-36 w-28 items-center justify-center rounded-md font-serif text-3xl font-bold text-primary-foreground shadow-md transition-transform duration-500 group-hover:scale-105"
+                        style={{ background: `linear-gradient(135deg, var(--chart-${(index % 5) + 1}), var(--primary))` }}
+                      >
+                        {book.title.charAt(0)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1">
+                      {book.genre?.map(g => (
+                        <span key={g._id} className="rounded-md bg-primary/10 text-primary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest font-bold">{g.name}</span>
+                      ))}
+                    </div>
+                    <span className="font-mono text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">{book.publicationYear || "N/A"}</span>
+                  </div>
+                  <h2 className="mt-4 font-serif text-xl font-bold leading-tight group-hover:text-primary transition-colors">{book.title}</h2>
+                  <p className="text-sm text-muted-foreground mt-1 font-medium">por {book.author?.name || 'Desconhecido'}</p>
+                  {(book.rating || book.cryRating) && (
+                    <div className="flex items-center gap-3 mt-2">
+                      {renderStars(book.rating || 0)}
+                      {book.cryRating ? <span className="text-lg" title="Nível de Choro">{CRY_EMOJIS[book.cryRating as keyof typeof CRY_EMOJIS]}</span> : null}
                     </div>
                   )}
-                </div>
-
-                <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
-                  <div className="flex flex-wrap gap-1">
-                    {book.genre?.map(g => (
-                      <span key={g._id} className="rounded-md bg-primary/10 text-primary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest font-bold">
-                        {g.name}
-                      </span>
-                    ))}
-                  </div>
-                  <span className="font-mono text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">{book.publicationYear || "N/A"}</span>
-                </div>
-
-                <h2 className="mt-4 font-serif text-xl font-bold leading-tight group-hover:text-primary transition-colors">
-                  {book.title}
-                </h2>
-                <p className="text-sm text-muted-foreground mt-1 font-medium">por {book.author?.name || 'Desconhecido'}</p>
-
-                {(book.rating || book.cryRating) && (
-                  <div className="flex items-center gap-3 mt-2">
-                    {renderStars(book.rating || 0)}
-                    {book.cryRating ? <span className="text-lg" title="Nível de Choro">{CRY_EMOJIS[book.cryRating as keyof typeof CRY_EMOJIS]}</span> : null}
-                  </div>
-                )}
-
-                <p className="mt-3 line-clamp-3 text-sm text-foreground/70 leading-relaxed flex-1">{book.description}</p>
-
-                {/* Botões fixos no rodapé do card */}
-                <div className={`mt-4 pt-3 border-t border-border grid gap-2 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                  {isAdmin && (
-                    <button
-                      onClick={() => openEditModal(book)}
-                      className="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-background py-2 text-sm font-semibold text-foreground hover:bg-primary hover:text-primary-foreground hover:border-primary transition-colors"
-                    >
-                      ✏️ Editar
+                  <p className="mt-3 line-clamp-3 text-sm text-foreground/70 leading-relaxed flex-1">{book.description}</p>
+                  <div className={`mt-4 pt-3 border-t border-border grid gap-2 ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
+                    {isAdmin && (
+                      <button onClick={() => openEditModal(book)} className="flex items-center justify-center gap-1.5 rounded-lg border border-border bg-background py-2 text-sm font-semibold text-foreground hover:bg-primary hover:text-primary-foreground hover:border-primary transition-colors">
+                        ✏️ Editar
+                      </button>
+                    )}
+                    <button onClick={() => setViewingBook(book)} className="flex items-center justify-center gap-1.5 rounded-lg border border-primary/40 bg-primary/5 py-2 text-sm font-semibold text-primary hover:bg-primary hover:text-primary-foreground transition-colors">
+                      👁️ Visualizar
                     </button>
-                  )}
-                  <button
-                    onClick={() => setViewingBook(book)}
-                    className="flex items-center justify-center gap-1.5 rounded-lg border border-primary/40 bg-primary/5 py-2 text-sm font-semibold text-primary hover:bg-primary hover:text-primary-foreground transition-colors"
+                  </div>
+                </article>
+              ))}
+            </section>
+            {filtered.length === 0 && (
+              <div className="mt-10 rounded-2xl border-2 border-dashed border-border bg-card p-16 text-center shadow-sm">
+                <p className="font-serif text-xl font-medium">Nenhum livro encontrado.</p>
+                <p className="mt-2 text-sm text-muted-foreground">Tente buscar por outros termos.</p>
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {/* ABA WISHLIST */}
+            <p className="mb-6 font-mono text-xs text-muted-foreground">
+              {`${wishlist.filter(w => {
+                const q = query.toLowerCase().trim();
+                const matchQ = !q || w.title.toLowerCase().includes(q) || (w.author?.name || '').toLowerCase().includes(q);
+                const matchG = filterGenre === "Todos" || w.genre?.some(g => g.name === filterGenre);
+                return matchQ && matchG;
+              }).length} ${wishlist.length === 1 ? "item na lista" : "itens na lista"}`}
+            </p>
+            <section className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+              {wishlist
+                .filter(w => {
+                  const q = query.toLowerCase().trim();
+                  const matchQ = !q || w.title.toLowerCase().includes(q) || (w.author?.name || '').toLowerCase().includes(q);
+                  const matchG = filterGenre === "Todos" || w.genre?.some(g => g.name === filterGenre);
+                  return matchQ && matchG;
+                })
+                .map((item, index) => (
+                  <article
+                    key={item._id}
+                    className="group flex flex-col rounded-xl border border-border bg-card p-5 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:border-primary/50 relative overflow-hidden"
                   >
-                    👁️ Visualizar
-                  </button>
+                    <div className="mb-4 flex h-48 items-center justify-center rounded-lg bg-muted overflow-hidden relative shadow-inner">
+                      {item.coverUrl ? (
+                        <img src={item.coverUrl} alt={`Capa de ${item.title}`} className="h-full w-full object-cover opacity-90 transition-transform duration-500 group-hover:scale-105" />
+                      ) : (
+                        <div
+                          className="flex h-36 w-28 items-center justify-center rounded-md font-serif text-3xl font-bold text-primary-foreground shadow-md"
+                          style={{ background: `linear-gradient(135deg, var(--chart-${(index % 5) + 1}), var(--primary))` }}
+                        >
+                          {item.title.charAt(0)}
+                        </div>
+                      )}
+                      {/* Badge Wishlist */}
+                      <span className="absolute top-3 left-3 bg-primary/90 text-primary-foreground text-[10px] font-bold px-2 py-1 rounded-full">🎁 Desejo</span>
+                    </div>
+                    <div className="flex items-center justify-between mt-2 flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-1">
+                        {item.genre?.map(g => (
+                          <span key={g._id} className="rounded-md bg-primary/10 text-primary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest font-bold">{g.name}</span>
+                        ))}
+                      </div>
+                      <span className="font-mono text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">{item.publicationYear || "N/A"}</span>
+                    </div>
+                    <h2 className="mt-4 font-serif text-xl font-bold leading-tight group-hover:text-primary transition-colors">{item.title}</h2>
+                    <p className="text-sm text-muted-foreground mt-1 font-medium">por {item.author?.name || 'Desconhecido'}</p>
+                    {item.purchaseLink && (
+                      <a href={item.purchaseLink} target="_blank" rel="noopener noreferrer"
+                        className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline">
+                        🛒 Link de Compra
+                      </a>
+                    )}
+                    <div className={`mt-4 pt-3 border-t border-border grid gap-2 ${isAdmin ? 'grid-cols-3' : 'grid-cols-1'}`}>
+                      {isAdmin && (
+                        <button onClick={() => openEditWishlistModal(item)} className="flex items-center justify-center gap-1 rounded-lg border border-border bg-background py-2 text-xs font-semibold text-foreground hover:bg-primary hover:text-primary-foreground hover:border-primary transition-colors">
+                          ✏️ Editar
+                        </button>
+                      )}
+                      <button onClick={() => setViewingWishlistBook(item)} className="flex items-center justify-center gap-1 rounded-lg border border-primary/40 bg-primary/5 py-2 text-xs font-semibold text-primary hover:bg-primary hover:text-primary-foreground transition-colors">
+                        👁️ Ver
+                      </button>
+                      {isAdmin && (
+                        <button onClick={() => handleMoveToCatalog(item)} className="flex items-center justify-center gap-1 rounded-lg border border-green-500/40 bg-green-500/5 py-2 text-xs font-semibold text-green-600 hover:bg-green-500 hover:text-white transition-colors">
+                          📚 Mover
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                ))}
+            </section>
+            {wishlist.length === 0 && (
+              <div className="mt-10 rounded-2xl border-2 border-dashed border-border bg-card p-16 text-center shadow-sm">
+                <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
+                  <span className="text-2xl">🎁</span>
                 </div>
-              </article>
-            ))}
-          </section>
+                <p className="font-serif text-xl font-medium">Sua lista de desejos está vazia.</p>
+                <p className="mt-2 text-sm text-muted-foreground">Adicione livros que você deseja adquirir!</p>
+              </div>
+            )}
+          </>
         )}
       </main>
+
 
       {/* Modal de Livro */}
       {isModalOpen && isAdmin && (
@@ -852,6 +1067,210 @@ function Catalog({ userRole, onLogout }: { userRole: "admin" | "visitor", onLogo
                 <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
                   <h3 className="text-xs font-bold uppercase tracking-wider text-primary mb-2">✍️ Resenha</h3>
                   <p className="text-sm text-foreground/80 leading-relaxed">{viewingBook.review}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Formulário Wishlist */}
+      {isWishlistModalOpen && isAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4">
+          <div className="bg-card w-full max-w-lg rounded-2xl shadow-2xl border border-border p-8 relative max-h-[90vh] overflow-y-auto">
+            <button onClick={() => setIsWishlistModalOpen(false)} className="absolute top-6 right-6 text-muted-foreground hover:text-foreground bg-muted hover:bg-accent rounded-full p-2">✕</button>
+            <h2 className="text-3xl font-serif font-bold mb-6">{editingWishlistId ? "Editar Desejo" : "Novo Desejo"}</h2>
+
+            <form onSubmit={handleSaveWishlistBook} className="flex flex-col gap-5">
+              {/* Título */}
+              <div>
+                <label className="text-sm font-semibold mb-1.5 block">Título *</label>
+                <input
+                  required
+                  type="text"
+                  value={wishlistFormData.title}
+                  onChange={e => setWishlistFormData({ ...wishlistFormData, title: e.target.value })}
+                  className="w-full rounded-lg border px-4 py-2.5 text-sm"
+                />
+              </div>
+
+              {/* Autor */}
+              <div>
+                <label className="text-sm font-semibold mb-1.5 block">Autor *</label>
+                <div className="flex gap-2">
+                  <select
+                    required
+                    value={wishlistFormData.author}
+                    onChange={e => setWishlistFormData({ ...wishlistFormData, author: e.target.value })}
+                    className="w-full rounded-lg border px-3 py-2.5 text-sm"
+                  >
+                    <option value="">Selecione...</option>
+                    {authors.map(a => <option key={a._id} value={a._id}>{a.name}</option>)}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setAgModal({ type: 'author', id: null, name: '' })}
+                    className="bg-accent hover:bg-accent/80 text-accent-foreground px-4 rounded-lg text-sm font-bold whitespace-nowrap"
+                  >
+                    + NOVO
+                  </button>
+                </div>
+              </div>
+
+              {/* Gêneros */}
+              <div>
+                <label className="text-sm font-semibold mb-1.5 block">Gêneros *</label>
+                <div className="flex flex-col gap-2">
+                  {wishlistFormData.genre.map((g, index) => (
+                    <div key={index} className="flex gap-2">
+                      <select
+                        required
+                        value={g}
+                        onChange={(e) => {
+                          const newGenres = [...wishlistFormData.genre];
+                          newGenres[index] = e.target.value;
+                          setWishlistFormData({ ...wishlistFormData, genre: newGenres });
+                        }}
+                        className="w-full rounded-lg border px-3 py-2.5 text-sm"
+                      >
+                        <option value="">Selecione...</option>
+                        {genres.map((gen) => (
+                          <option key={gen._id} value={gen._id} disabled={wishlistFormData.genre.includes(gen._id) && gen._id !== g}>
+                            {gen.name}
+                          </option>
+                        ))}
+                      </select>
+                      <button type="button" onClick={() => {
+                        const newGenres = wishlistFormData.genre.filter((_, i) => i !== index);
+                        setWishlistFormData({ ...wishlistFormData, genre: newGenres });
+                      }} className="bg-accent px-2 rounded-md text-xs h-11" title="Remover">✕</button>
+                    </div>
+                  ))}
+                  <div className="flex flex-wrap gap-2 mt-1">
+                    <button type="button" onClick={() => setWishlistFormData({ ...wishlistFormData, genre: [...wishlistFormData.genre, ""] })} className="bg-accent px-3 py-2 rounded-md text-xs font-bold">+ ADICIONAR GÊNERO</button>
+                    <button type="button" onClick={() => setAgModal({ type: 'genre', id: null, name: '' })} className="bg-accent px-3 py-2 rounded-md text-xs font-bold">+ NOVO GÊNERO</button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Ano e Capa */}
+              <div className="grid grid-cols-2 gap-5">
+                <div>
+                  <label className="text-sm font-semibold mb-1.5 block">Ano</label>
+                  <input
+                    type="number"
+                    value={wishlistFormData.publicationYear}
+                    onChange={e => setWishlistFormData({ ...wishlistFormData, publicationYear: e.target.value })}
+                    className="w-full rounded-lg border px-4 py-2.5 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-semibold mb-1.5 block">URL da Capa</label>
+                  <input
+                    type="url"
+                    placeholder="https://..."
+                    value={wishlistFormData.coverUrl}
+                    onChange={e => setWishlistFormData({ ...wishlistFormData, coverUrl: e.target.value })}
+                    className="w-full rounded-lg border px-4 py-2.5 text-sm"
+                  />
+                </div>
+              </div>
+
+              {/* Link de Compra */}
+              <div>
+                <label className="text-sm font-semibold mb-1.5 block">Link de Compra</label>
+                <input
+                  type="url"
+                  placeholder="https://..."
+                  value={wishlistFormData.purchaseLink}
+                  onChange={e => setWishlistFormData({ ...wishlistFormData, purchaseLink: e.target.value })}
+                  className="w-full rounded-lg border px-4 py-2.5 text-sm"
+                />
+              </div>
+
+              {/* Botões finais */}
+              <div className={`mt-2 flex ${editingWishlistId ? 'justify-between gap-4' : 'justify-end'}`}>
+                {editingWishlistId && (
+                  <button type="button" onClick={handleDeleteWishlistBook} disabled={isSubmitting} className="text-destructive font-semibold">
+                    Excluir
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className={`bg-primary text-primary-foreground hover:bg-primary/90 px-5 py-2.5 rounded-lg font-semibold ${!editingWishlistId ? 'w-full' : 'w-2/3'}`}
+                >
+                  {isSubmitting ? "Salvando..." : "Salvar"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Visualização Wishlist */}
+      {viewingWishlistBook && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-sm p-4" onClick={() => setViewingWishlistBook(null)}>
+          <div className="bg-card w-full max-w-lg rounded-2xl shadow-2xl border border-border relative max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="relative h-56 w-full overflow-hidden rounded-t-2xl bg-muted">
+              {viewingWishlistBook.coverUrl ? (
+                <img src={viewingWishlistBook.coverUrl} alt={`Capa de ${viewingWishlistBook.title}`} className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center font-serif text-6xl font-bold text-primary-foreground"
+                  style={{ background: `linear-gradient(135deg, var(--chart-1), var(--primary))` }}>
+                  {viewingWishlistBook.title.charAt(0)}
+                </div>
+              )}
+              <span className="absolute top-4 left-4 bg-primary/90 text-primary-foreground text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">🎁 Lista de Desejos</span>
+              <button
+                onClick={() => setViewingWishlistBook(null)}
+                className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors"
+              >✕</button>
+              {isAdmin && (
+                <button
+                  onClick={() => { setViewingWishlistBook(null); openEditWishlistModal(viewingWishlistBook); }}
+                  className="absolute bottom-4 right-4 bg-primary text-primary-foreground rounded-lg px-4 py-2 text-sm font-semibold shadow-lg hover:bg-primary/90 transition-colors"
+                >
+                  ✏️ Editar
+                </button>
+              )}
+            </div>
+
+            <div className="p-6">
+              <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {viewingWishlistBook.genre?.map(g => (
+                    <span key={g._id} className="rounded-md bg-primary/10 text-primary px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest font-bold">
+                      {g.name}
+                    </span>
+                  ))}
+                </div>
+                {viewingWishlistBook.publicationYear && (
+                  <span className="font-mono text-xs font-medium text-muted-foreground bg-muted px-2 py-1 rounded-md">
+                    {viewingWishlistBook.publicationYear}
+                  </span>
+                )}
+              </div>
+
+              <h2 className="font-serif text-2xl font-bold leading-tight">{viewingWishlistBook.title}</h2>
+              <p className="text-sm text-muted-foreground mt-1 font-medium mb-5">por {viewingWishlistBook.author?.name || 'Desconhecido'}</p>
+
+              {viewingWishlistBook.purchaseLink && (
+                <div className="mb-4">
+                  <a href={viewingWishlistBook.purchaseLink} target="_blank" rel="noopener noreferrer" className="inline-flex w-full justify-center items-center gap-2 bg-primary/10 hover:bg-primary/20 text-primary px-4 py-3 rounded-xl font-bold transition-colors">
+                    🛒 Acessar Link de Compra
+                  </a>
+                </div>
+              )}
+
+              {isAdmin && (
+                <div className="mt-6 pt-4 border-t border-border">
+                  <button 
+                    onClick={() => { setViewingWishlistBook(null); handleMoveToCatalog(viewingWishlistBook); }} 
+                    className="w-full flex items-center justify-center gap-2 rounded-lg border-2 border-green-500 bg-green-500/10 hover:bg-green-500 py-3 text-sm font-bold text-green-600 hover:text-white transition-colors"
+                  >
+                    📚 Adquiri este livro! Mover para o Catálogo
+                  </button>
                 </div>
               )}
             </div>
